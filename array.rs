@@ -1,11 +1,10 @@
 use base::{
-    AbstractCFType,
     AbstractCFTypeRef,
     CFAllocatorRef,
     CFIndex,
     CFRange,
-    CFRelease,
     CFTypeRef,
+    CFWrapper,
     kCFAllocatorDefault,
 };
 use libc::c_void;
@@ -26,28 +25,16 @@ pub struct CFArrayCallBacks {
 struct __CFArray { private: () }
 pub type CFArrayRef = *__CFArray;
 
-impl CFArrayRef : AbstractCFTypeRef {
+pub impl CFArrayRef : AbstractCFTypeRef {
     pure fn as_type_ref(&self) -> CFTypeRef { *self as CFTypeRef }
 }
 
-struct CFArray<ElemRefType : AbstractCFTypeRef,
-               ElemType    : AbstractCFType<ElemRefType>> {
-    obj: CFArrayRef,
+pub type CFArray<ElemRefType: AbstractCFTypeRef> = CFWrapper<CFArrayRef, ElemRefType, ()>;
 
-    drop {
-        unsafe {
-            CFRelease(cast::transmute(self.obj))
-        }
-    }
-}
-
-pub impl<ElemRefType : AbstractCFTypeRef,
-         ElemType    : AbstractCFType<ElemRefType>> 
-    CFArray<ElemRefType, ElemType> {
-    static fn new(elems: &[ElemType]) -> CFArray<ElemRefType, ElemType> {
+pub impl<ElemRefType:AbstractCFTypeRef> CFArray<ElemRefType> {
+    static fn new(elems: &[ElemRefType]) -> CFArray<ElemRefType> {
         let array_ref : CFArrayRef;
-
-        let elems_refs = do vec::map(elems) |e: &ElemType| { e.get_ref().as_type_ref() };
+        let elems_refs = do vec::map(elems) |e: &ElemRefType| { e.as_type_ref() };
 
         unsafe {
             array_ref = CFArrayCreate(kCFAllocatorDefault,
@@ -55,8 +42,7 @@ pub impl<ElemRefType : AbstractCFTypeRef,
                                       elems.len() as CFIndex,
                                       ptr::to_unsafe_ptr(&kCFTypeArrayCallBacks));
         }
-        // return CFArray::wrap(array_ref)
-        return CFArray { obj: array_ref };
+        return move CFWrapper::wrap_owned(array_ref);
     }
 
     pub fn each_ref<A>(cb: fn&(ElemRefType) -> A) {
@@ -67,43 +53,24 @@ pub impl<ElemRefType : AbstractCFTypeRef,
         for uint::range(0, self.len()) |i| { cb(i, self[i]); }
     }
 
-    pub fn each<A>(cb: fn&(&ElemType) -> A) {
-        for uint::range(0, self.len()) |i| { cb(&base::wrap(self[i])); }
+    pub fn each<A>(cb: fn&(&ElemRefType) -> A) {
+        for uint::range(0, self.len()) |i| { cb(&self[i]); }
     }
 
-    pub fn eachi<A>(cb: fn&(uint, &ElemType) -> A) {
-        for uint::range(0, self.len()) |i| { cb(i, &base::wrap(self[i])); }
+    pub fn eachi<A>(cb: fn&(uint, &ElemRefType) -> A) {
+        for uint::range(0, self.len()) |i| { cb(i, &self[i]); }
     }
 
     pub pure fn len() -> uint {
-        unsafe { return CFArrayGetCount(self.obj) as uint; }
-    }
-}
-
-pub impl<ElemRefType : AbstractCFTypeRef,
-         ElemType    : AbstractCFType<ElemRefType>> 
-    CFArray<ElemRefType, ElemType> : AbstractCFType<CFArrayRef> {
-
-    pure fn get_ref() -> CFArrayRef { self.obj }
-
-    static fn wrap(obj: CFArrayRef) -> CFArray<ElemRefType, ElemType> {
-        CFArray { obj: obj }
+        unsafe { return CFArrayGetCount(*self.borrow_ref()) as uint; }
     }
 
-    static fn unwrap(wrapper: CFArray<ElemRefType, ElemType>) -> CFArrayRef {
-        wrapper.obj
-    }
-}
-
-pub impl<ElemRefType : AbstractCFTypeRef,
-         ElemType    : AbstractCFType<ElemRefType>> 
-    CFArray<ElemRefType, ElemType> : Index<uint, ElemRefType> {
     pure fn index(idx: uint) -> ElemRefType {
         assert idx < self.len();
         unsafe { 
-            let elem = CFArrayGetValueAtIndex(self.obj, idx as CFIndex);
+            let elem = CFArrayGetValueAtIndex(*self.borrow_ref(), idx as CFIndex);
             // Don't return a wrapped thing, since we don't know whether
-            // it needs base::wrap() or base::wrap_borrowed()
+            // it needs base::wrap_shared() or base::wrap_owned()
             return cast::transmute(elem);
         }
     }
